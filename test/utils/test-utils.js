@@ -94,13 +94,24 @@ const runWatch = (cwd, args = [], options = {}) => {
   return new Promise((resolve, reject) => {
     const process = createProcess(cwd, args, options);
     const outputKillStr = options.killString || /webpack \d+\.\d+\.\d/;
+    const stdoutKillStr = options.stdoutKillStr;
+    const stderrKillStr = options.stderrKillStr;
+
+    let isStdoutDone = false;
+    let isStderrDone = false;
 
     process.stdout.pipe(
       new Writable({
         write(chunk, encoding, callback) {
           const output = stripAnsi(chunk.toString("utf8"));
 
-          if (outputKillStr.test(output)) {
+          if (stdoutKillStr && stdoutKillStr.test(output)) {
+            isStdoutDone = true;
+          } else if (!stdoutKillStr && outputKillStr.test(output)) {
+            processKill(process);
+          }
+
+          if (isStdoutDone && isStderrDone) {
             processKill(process);
           }
 
@@ -114,7 +125,13 @@ const runWatch = (cwd, args = [], options = {}) => {
         write(chunk, encoding, callback) {
           const output = stripAnsi(chunk.toString("utf8"));
 
-          if (outputKillStr.test(output)) {
+          if (stderrKillStr && stderrKillStr.test(output)) {
+            isStderrDone = true;
+          } else if (!stderrKillStr && outputKillStr.test(output)) {
+            processKill(process);
+          }
+
+          if (isStdoutDone && isStderrDone) {
             processKill(process);
           }
 
@@ -151,7 +168,7 @@ const runPromptWithAnswers = (location, args, answers) => {
   const writeAnswer = (output) => {
     if (!answers) {
       process.stdin.write(output);
-      process.kill();
+      processKill(process);
 
       return;
     }
@@ -196,7 +213,7 @@ const runPromptWithAnswers = (location, args, answers) => {
       }
 
       if (stdoutDone && stderrDone) {
-        process.kill("SIGKILL");
+        processKill(process);
         resolve(obj);
       }
     };
@@ -300,6 +317,21 @@ const normalizeStderr = (stderr) => {
     }
 
     normalizedStderr = normalizedStderr.join("\n");
+  }
+
+  // TODO remove me after drop old Node.js versions and update deps
+  // Suppress warnings for Node.js version >= v21
+  // [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+  if (process.version.startsWith("v21")) {
+    normalizedStderr = normalizedStderr
+      .split("\n")
+      .filter((line) => {
+        return (
+          !line.includes("DeprecationWarning: The `punycode` module is deprecated.") &&
+          !line.includes("Use `node --trace-deprecation ...`")
+        );
+      })
+      .join("\n");
   }
 
   // the warning below is causing CI failure on some jobs
